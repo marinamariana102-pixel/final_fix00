@@ -49,6 +49,7 @@ from app.domain.emios_models import (
 )
 
 MONTE_CARLO_SEED: int = 42
+DEFAULT_SIMULATION_COUNT: int = 1000
 
 
 @dataclass
@@ -413,7 +414,7 @@ def _enrich_learning_from_history(state: ProjectState, result: "PipelineResult")
 def run_emios_pipeline(
     state: ProjectState,
     *,
-    simulation_count: int = 1000,
+    simulation_count: int = DEFAULT_SIMULATION_COUNT,
     seed: int = MONTE_CARLO_SEED,
     actual_outcome: Optional[ActualSprintOutcome] = None,
     team_id: str = "default",

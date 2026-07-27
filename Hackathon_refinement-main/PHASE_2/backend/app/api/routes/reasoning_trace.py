@@ -19,7 +19,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query
 
 from app.api.models import ApiResponse
-from app.storage.session_store import store as session_store
+from app.storage.session_store import get_or_build_pipeline_result, store as session_store
 
 logger = logging.getLogger(__name__)
 
@@ -142,26 +142,13 @@ async def get_reasoning_trace(session_id: str = Query(...)):
     - Frontend ReasoningTrace.jsx (Phase 5)
     - scripts/validate_emios_pipeline.py INV checks (Phase 4)
     """
-    result = session_store.get_pipeline_result(session_id)
-
-    # Regular (non-demo) uploads never call run_emios_pipeline(), so the
-    # cached PipelineResult is usually missing here. Build it lazily from
-    # the session's ProjectState so the trace works for any session, not
-    # just ones loaded via /api/demo/load.
-    if result is None:
-        project_state = session_store.get_project_state(session_id)
-        if project_state is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-
-        try:
-            from app.pipeline.emios_pipeline import run_emios_pipeline
-            result = run_emios_pipeline(project_state, simulation_count=1000, seed=42)
-            session_store.set_pipeline_result(session_id, result)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to compute reasoning trace: {exc}",
-            )
+    try:
+        result = get_or_build_pipeline_result(session_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to compute reasoning trace: {exc}",
+        )
 
     # Phase 7: upgrade advisor_output with live Bosch LLM Farm response.
     # This runs every time so the advisor always reflects the latest state.

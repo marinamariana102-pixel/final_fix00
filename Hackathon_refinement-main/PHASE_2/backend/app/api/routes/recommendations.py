@@ -8,7 +8,7 @@ Endpoints:
 """
 from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Optional, Dict, List, Any
-from app.storage import store
+from app.storage import get_or_build_pipeline_result, store
 from app.api.models import ApiResponse, ErrorCodes
 from app.engines.dependency_engine import DependencyDAG
 from app.engines.metrics_engine import ProjectMetrics
@@ -453,7 +453,7 @@ async def get_recommendations(
         # POST /api/demo/load runs the full EMIOS pipeline and stores the result.
         # Reading from it here ensures recommendations are consistent with the
         # diagnosis, decision, and recovery plans shown on other tabs.
-        pipeline_result = store.get_pipeline_result(session_id)
+        pipeline_result = get_or_build_pipeline_result(session_id)
         if pipeline_result and getattr(pipeline_result, "recommendations", None):
             # Rebuild the engine so we can call _compute_upstream() for advisor
             # input — but skip generate() since we already have the recs.

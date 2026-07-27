@@ -15,7 +15,7 @@ are derived from the aggregate pattern.
 from fastapi import APIRouter, HTTPException, Query
 from typing import Dict, List, Any
 from app.api.models import ApiResponse
-from app.storage.session_store import store
+from app.storage.session_store import get_or_build_pipeline_result, store
 from app.domain.models import WorkItemStatus
 
 router = APIRouter(prefix="/api", tags=["Sprint Health"])
@@ -330,9 +330,10 @@ def get_sprint_health(session_id: str = Query(...)):
     session = store.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
-    result = store.get_pipeline_result(session_id)
-    if result is None:
-        raise HTTPException(status_code=404, detail="Pipeline result not available — load demo first")
+    try:
+        result = get_or_build_pipeline_result(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     hist = getattr(result, "historical_analysis", None)
     if hist is None:
         raise HTTPException(status_code=404, detail="Historical analysis not available")

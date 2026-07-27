@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 from typing import Any, Dict, Optional
 
 from app.api.models import ApiResponse
-from app.storage.session_store import store
+from app.storage.session_store import get_or_build_pipeline_result, store
 from app.engines.pmo_kpi_engine import PMOKpiEngine
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,10 @@ def get_session_snapshot(session_id: str = Query(...)):
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    result = store.get_pipeline_result(session_id)
+    try:
+        result = get_or_build_pipeline_result(session_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     # ── Monte Carlo ───────────────────────────────────────────────────────────
     mc = _safe_val(result, "monte_carlo")
@@ -156,6 +159,13 @@ def get_session_snapshot(session_id: str = Query(...)):
         # ("what the engine ruled out") is genuinely new content, not shown elsewhere on
         # Overview, so that's what we surface instead.
         emios_strip["reasoning_explanation"] = _safe_val(advisor, "reasoning_explanation")
+
+    blocker_metrics_data: Dict = {}
+    blocker_metrics = None
+    if getattr(result, "metrics", None) is not None:
+        blocker_metrics = getattr(result.metrics, "blocker_metrics", None)
+    if blocker_metrics is not None:
+        blocker_metrics_data = blocker_metrics.model_dump() if hasattr(blocker_metrics, "model_dump") else {}
 
     # ── Baseline snapshot (stored on session at prewarm time) ─────────────────
     baseline = getattr(session, "baseline_snapshot", None) or {}
@@ -263,6 +273,7 @@ def get_session_snapshot(session_id: str = Query(...)):
             "monte_carlo": mc_data,
             "forecast": forecast_data,
             "risk": risk_data,
+            "blocker_metrics": blocker_metrics_data,
             "emios_strip": emios_strip,
             "baseline_snapshot": baseline,
             "historical": hist_data,

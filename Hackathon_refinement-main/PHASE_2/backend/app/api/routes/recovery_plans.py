@@ -26,8 +26,9 @@ from app.api.models_recovery_plans import (
 from app.engines.recovery_plan_engine import RecoveryPlanEngine
 from app.engines.recommendation_engine.models import ScoringWeights
 from app.engines.recommendation_engine.recommendation_engine_v2 import RecommendationEngineV2
-from app.engines.simulation_engine import SimulationEngine
-from app.storage import store
+from app.engines.simulation_engine import ActionApplicator, SimulationEngine
+from app.storage import get_or_build_pipeline_result, store
+from app.storage.session_store import SessionNotFound
 
 router = APIRouter(prefix="/api", tags=["Recovery Plans"])
 
@@ -91,25 +92,18 @@ async def get_recovery_plans(
     try:
         session_id = session_id.strip()
 
-        # ── Fast path: EMIOS pipeline result already stored ──────────────────
-        pipeline_result = store.get_pipeline_result(session_id)
+        # ── Fast path: use the canonical pipeline result for this session ───
+        pipeline_result = get_or_build_pipeline_result(session_id)
         recovery_plans = getattr(pipeline_result, "recovery_plans", None) if pipeline_result else None
 
         if not recovery_plans:
-            # ── Slow path: rebuild engines from scratch ───────────────────────
-            recovery_plan_engine, recommendation_engine = _build_recovery_plan_engine(session_id)
-            recommendations = recommendation_engine.generate(top_n=20)
-            if not recommendations:
-                raise HTTPException(
-                    status_code=400,
-                    detail=ApiResponse(
-                        success=False,
-                        error_code=ErrorCodes.INVALID_REQUEST,
-                        message="No recommendations available to build recovery plans",
-                    ).model_dump(mode="json"),
-                )
-            recovery_plans = recovery_plan_engine.generate_recovery_plans(
-                recommendations=recommendations,
+            raise HTTPException(
+                status_code=400,
+                detail=ApiResponse(
+                    success=False,
+                    error_code=ErrorCodes.INVALID_REQUEST,
+                    message="Failed to generate recovery plans",
+                ).model_dump(mode="json"),
             )
 
         if not recovery_plans:
@@ -165,26 +159,19 @@ async def get_recovery_plan_detail(
     try:
         session_id = session_id.strip()
         plan_id = plan_id.strip()
-        
-        # Build engines
-        recovery_plan_engine, recommendation_engine = _build_recovery_plan_engine(session_id)
-        
-        # Generate recommendations
-        recommendations = recommendation_engine.generate(top_n=20)
-        if not recommendations:
+
+        pipeline_result = get_or_build_pipeline_result(session_id)
+        recovery_plans = getattr(pipeline_result, "recovery_plans", None) if pipeline_result else None
+        if not recovery_plans:
             raise HTTPException(
                 status_code=400,
                 detail=ApiResponse(
                     success=False,
                     error_code=ErrorCodes.INVALID_REQUEST,
-                    message="No recommendations available",
+                    message="No recovery plans available",
                 ).model_dump(mode="json"),
             )
-        
-        # Generate all recovery plans
-        recovery_plans = recovery_plan_engine.generate_recovery_plans(recommendations=recommendations)
-        
-        # Find the requested plan
+
         requested_plan = next((p for p in recovery_plans if p.plan_id == plan_id), None)
         if not requested_plan:
             raise HTTPException(
@@ -245,12 +232,18 @@ async def apply_recovery_plan(
                 ).model_dump(mode="json"),
             )
         
-        # Build engines to find the plan
-        recovery_plan_engine, recommendation_engine = _build_recovery_plan_engine(session_id)
-        recommendations = recommendation_engine.generate(top_n=20)
-        recovery_plans = recovery_plan_engine.generate_recovery_plans(recommendations=recommendations)
-        
-        # Find the plan to apply
+        pipeline_result = get_or_build_pipeline_result(session_id)
+        recovery_plans = getattr(pipeline_result, "recovery_plans", None) if pipeline_result else None
+        if not recovery_plans:
+            raise HTTPException(
+                status_code=404,
+                detail=ApiResponse(
+                    success=False,
+                    error_code=ErrorCodes.NOT_FOUND,
+                    message=f"Plan {plan_id} not found",
+                ).model_dump(mode="json"),
+            )
+
         plan_to_apply = next((p for p in recovery_plans if p.plan_id == plan_id), None)
         if not plan_to_apply:
             raise HTTPException(
@@ -267,7 +260,7 @@ async def apply_recovery_plan(
 
         # Apply the plan to a deep-cloned project state so the simulation engine remains deterministic
         updated_state = project_state.model_copy(deep=True)
-        recovery_plan_engine.simulation_engine.applicator.apply_many(updated_state, plan_to_apply.actions)
+        ActionApplicator().apply_many(updated_state, plan_to_apply.actions)
         session.project_state = updated_state
         # session.project_state was just replaced wholesale — any ProjectAnalysis
         # cached against the old state is now describing a project that no

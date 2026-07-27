@@ -14,6 +14,14 @@ from app.domain.models import ProjectState
 from app.domain.emios_models import ActualSprintOutcome
 
 
+class SessionNotFound(Exception):
+    """Raised when a requested session does not exist."""
+
+    def __init__(self, session_id: str):
+        super().__init__(f"Session {session_id} not found")
+        self.session_id = session_id
+
+
 def _snapshot_from_analysis(analysis) -> dict:
     """Lightweight metrics snapshot for reforecast comparison tracking."""
     try:
@@ -239,6 +247,33 @@ class SessionStore:
         if session is not None:
             session.pipeline_result = pipeline_result
 
+    def get_or_build_pipeline_result(self, session_id: str):
+        """
+        Return cached pipeline result for session_id.
+        If not yet built (for example after a normal workbook upload), build it
+        now and cache it.
+        """
+        session = self.get_session(session_id)
+        if session is None:
+            raise SessionNotFound(session_id)
+
+        if session.pipeline_result is not None:
+            return session.pipeline_result
+
+        project_state = session.project_state
+        if project_state is None:
+            raise SessionNotFound(session_id)
+
+        from app.pipeline.emios_pipeline import DEFAULT_SIMULATION_COUNT, run_emios_pipeline
+
+        pipeline_result = run_emios_pipeline(
+            project_state,
+            simulation_count=DEFAULT_SIMULATION_COUNT,
+            seed=42,
+        )
+        self.set_pipeline_result(session_id, pipeline_result)
+        return pipeline_result
+
     def get_pipeline_result(self, session_id: str):
         """Return the stored PipelineResult, or None if not yet run."""
         session = self.get_session(session_id)
@@ -335,3 +370,8 @@ class SessionStore:
 
 # Global singleton instance
 store = SessionStore()
+
+
+def get_or_build_pipeline_result(session_id: str):
+    """Convenience wrapper around the shared session-store accessor."""
+    return store.get_or_build_pipeline_result(session_id)

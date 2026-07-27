@@ -156,7 +156,10 @@ class BlockerMetrics(BaseModel):
     """Analytical blocker facts for recurring risk detection."""
 
     blocker_count_by_severity: Dict[str, int] = Field(default_factory=dict)
+    total_blocker_count: int = Field(default=0)
     active_blocker_count: int = Field(default=0)
+    resolved_blocker_count: int = Field(default=0)
+    current_sprint_active_blocker_count: int = Field(default=0)
     estimated_blocker_velocity_impact: float = Field(default=0.0)
     recurring_blocker_categories: Dict[str, int] = Field(default_factory=dict)
     average_resolution_days: float = Field(default=0.0)
@@ -895,6 +898,7 @@ class MetricsEngine:
         """Build deterministic blocker analytics from blocker records."""
         blocker_counts = self._count_blockers_by_severity(blockers)
         active_blockers = [b for b in blockers if not b.actual_resolution_date]
+        resolved_blockers = [b for b in blockers if b.actual_resolution_date and b.raised_date]
         _as_of = self.project_state.project_info.effective_as_of_date()
         blocker_velocity_impact = self._estimate_blocker_velocity_impact(
             blockers,
@@ -906,7 +910,6 @@ class MetricsEngine:
         for blocker in blockers:
             recurring_categories[blocker.category.value] = recurring_categories.get(blocker.category.value, 0) + 1
 
-        resolved_blockers = [b for b in blockers if b.actual_resolution_date and b.raised_date]
         resolution_days = []
         for blocker in resolved_blockers:
             delta = blocker.actual_resolution_date - blocker.raised_date
@@ -931,9 +934,31 @@ class MetricsEngine:
         )
         blocker_trend_score = max(0.0, 1.0 - (len(active_blockers) / max(len(blockers), 1)))
 
+        current_sprint_number = self._get_current_sprint_number(self.project_state.sprints)
+        current_sprint = next(
+            (s for s in self.project_state.sprints if s.sprint_number == current_sprint_number),
+            None,
+        )
+        current_sprint_name = getattr(current_sprint, "sprint_name", None)
+        work_items = getattr(self.project_state, "work_items", None) or []
+        current_sprint_work_item_ids = {
+            wi.item_id for wi in work_items if getattr(wi, "assigned_sprint", None) == current_sprint_name
+        }
+        current_sprint_active_blocker_count = sum(
+            1
+            for blocker in active_blockers
+            if any(
+                impacted_item_id in current_sprint_work_item_ids
+                for impacted_item_id in getattr(blocker, "impacted_item_ids", []) or [getattr(blocker, "related_item_id", None)]
+            )
+        )
+
         return BlockerMetrics(
             blocker_count_by_severity=blocker_counts,
+            total_blocker_count=len(blockers),
             active_blocker_count=len(active_blockers),
+            resolved_blocker_count=len(resolved_blockers),
+            current_sprint_active_blocker_count=current_sprint_active_blocker_count,
             estimated_blocker_velocity_impact=blocker_velocity_impact,
             recurring_blocker_categories=recurring_categories,
             average_resolution_days=average_resolution_days,
