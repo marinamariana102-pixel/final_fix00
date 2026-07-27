@@ -25,6 +25,36 @@ function MetricCard({label, value}){
 
 function OverviewPage({ session, onNavigate }) {
   const summary = session.project_summary
+  const [blockerCount, setBlockerCount] = useState(summary?.total_blockers ?? '—')
+  const [blockerLoading, setBlockerLoading] = useState(true)
+
+  useEffect(() => {
+    let isMounted = true
+    const sessionId = session?.project_summary?.session_id
+
+    if (!sessionId) {
+      setBlockerCount(summary?.total_blockers ?? '—')
+      setBlockerLoading(false)
+      return () => { isMounted = false }
+    }
+
+    setBlockerLoading(true)
+    api.sessionSnapshot(sessionId)
+      .then((snapshot) => {
+        if (!isMounted) return
+        const activeCount = snapshot?.blocker_metrics?.active_blocker_count
+        setBlockerCount(typeof activeCount === 'number' ? activeCount : (summary?.total_blockers ?? '—'))
+        setBlockerLoading(false)
+      })
+      .catch(() => {
+        if (!isMounted) return
+        setBlockerCount(summary?.total_blockers ?? '—')
+        setBlockerLoading(false)
+      })
+
+    return () => { isMounted = false }
+  }, [session?.project_summary?.session_id, summary?.total_blockers])
+
   return (
     <div>
       <HeroBanner session={session} onNavigate={onNavigate} />
@@ -40,7 +70,7 @@ function OverviewPage({ session, onNavigate }) {
 
         <div className="mt-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetricCard label="Sprints" value={`${summary.completed_sprints ?? '—'} / ${summary.total_sprints ?? '—'}`} />
-          <MetricCard label="Blockers active" value={summary.total_blockers ?? '—'} />
+          <MetricCard label="Blockers active" value={blockerLoading ? '…' : (blockerCount ?? '—')} />
           <MetricCard label="Work items" value={summary.total_work_items ?? '—'} />
           <MetricCard label="Dependencies" value={summary.total_dependencies ?? '—'} />
         </div>
